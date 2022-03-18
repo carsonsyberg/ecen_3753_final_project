@@ -1,0 +1,37 @@
+# Silicon Labs Project Configuration Tools: slcp, v0, Component selection file.
+project_name: z_Final_Project
+label: z_Final_Project
+description: |
+  This example project demonstrates use of the Memory Liquid Crystal Display (LCD)  module in a Micrium OS kernel task, using Silicon Labs Graphics Library (glib).
+category: Example|Platform
+package: platform
+quality: production
+readme:
+- {path: ../../../../../SiliconLabs/SimplicityStudio/v5/developer/sdks/gecko_sdk_suite/v3.2/app/common/example/memlcd_kernel_micriumos/readme.html}
+source:
+- {path: app.c}
+- {path: main.c}
+- {path: memlcd_app.c}
+tag: ['hardware:device:ram:16', 'hardware:component:display']
+include:
+- path: ''
+  file_list:
+  - {path: app.h}
+  - {path: memlcd_app.h}
+sdk: {id: gecko_sdk, version: 3.2.2}
+toolchain_settings: []
+component:
+- {id: board_control}
+- {id: EFM32PG12B500F1024GL125}
+- {id: glib}
+- {id: micriumos_kernel}
+- {id: sl_system}
+- instance: [btn0, btn1]
+  id: simple_button
+- {id: device_init}
+- {id: dmd_memlcd}
+- {id: brd2501a}
+define:
+- {name: DEBUG_EFM}
+ui_hints: {}
+
