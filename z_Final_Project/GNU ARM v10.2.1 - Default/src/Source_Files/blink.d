@@ -103,6 +103,8 @@ src/Source_Files/blink.o: ../src/Source_Files/blink.c \
  c\:\siliconlabs\simplicitystudio\v5\developer\sdks\gecko_sdk_suite\v3.2\platform\emlib\inc\em_cmu.h \
  c\:\siliconlabs\simplicitystudio\v5\developer\sdks\gecko_sdk_suite\v3.2\platform\emlib\inc\em_cmu_compat.h \
  c\:\siliconlabs\simplicitystudio\v5\developer\sdks\gecko_sdk_suite\v3.2\platform\emlib\inc\em_gpio.h \
+ C\:\Users\Carson\SimplicityStudio\v5_workspace\z_Final_Project\src\Header_Files/town.h \
+ C\:\Users\Carson\SimplicityStudio\v5_workspace\z_Final_Project\src\Header_Files/person2.h \
  C\:\Users\Carson\SimplicityStudio\v5_workspace\z_Final_Project\src\Header_Files/queue.h \
  c\:\siliconlabs\simplicitystudio\v5\developer\sdks\gecko_sdk_suite\v3.2\platform\middleware\glib\glib\glib.h \
  c\:\siliconlabs\simplicitystudio\v5\developer\sdks\gecko_sdk_suite\v3.2\platform\middleware\glib\glib\glib_color.h \
@@ -216,6 +218,8 @@ C\:\Users\Carson\SimplicityStudio\v5_workspace\z_Final_Project\src\Header_Files/
 c\:\siliconlabs\simplicitystudio\v5\developer\sdks\gecko_sdk_suite\v3.2\platform\emlib\inc\em_cmu.h:
 c\:\siliconlabs\simplicitystudio\v5\developer\sdks\gecko_sdk_suite\v3.2\platform\emlib\inc\em_cmu_compat.h:
 c\:\siliconlabs\simplicitystudio\v5\developer\sdks\gecko_sdk_suite\v3.2\platform\emlib\inc\em_gpio.h:
+C\:\Users\Carson\SimplicityStudio\v5_workspace\z_Final_Project\src\Header_Files/town.h:
+C\:\Users\Carson\SimplicityStudio\v5_workspace\z_Final_Project\src\Header_Files/person2.h:
 C\:\Users\Carson\SimplicityStudio\v5_workspace\z_Final_Project\src\Header_Files/queue.h:
 c\:\siliconlabs\simplicitystudio\v5\developer\sdks\gecko_sdk_suite\v3.2\platform\middleware\glib\glib\glib.h:
 c\:\siliconlabs\simplicitystudio\v5\developer\sdks\gecko_sdk_suite\v3.2\platform\middleware\glib\glib\glib_color.h:

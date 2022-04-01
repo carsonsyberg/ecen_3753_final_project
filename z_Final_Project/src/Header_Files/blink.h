@@ -22,6 +22,8 @@
 #include "capsense.h"
 #include "em_emu.h"
 #include "app.h"
+#include "town.h"
+#include "person2.h"
 
 //#define BLINK_TASK_STACK_SIZE      96
 //#define BLINK_TASK_PRIO            20
@@ -110,20 +112,22 @@ struct direction_data {
 // Game Rules
 #define DATA_STRUCTURE_VERSION 1
 #define GRAVITY 10 //mm/s^2
-#define CANYON_SIZE 100 //cm (px)
+#define CANYON_SIZE 128 //cm (px)
 // Holtzmann Rules
 #define HM_NUM 10 // number of holtzmann masses
 #define HM_DIAM 10 //cm
 #define HM_INIT_CONDITIONS 1 //enum: Fixed=0. 127+ available for user defined modes
-#define HM_INITIAL_X_VELOCITY 5 //cm/s
+#define HM_INITIAL_X_VELOCITY 0 //cm/s
 #define HM_INITIAL_Y_VELOCITY 0 //cm/s
 #define HM_INITIAL_X_POSITION 64 //mm
 #define HM_INITIAL_Y_POSITION 0
 #define HM_USER_DEFINED_MODE_INPUT 0 //i.e. 8x32b set aside for user-defined mode params
 #define HM_MASS 10
+#define HM_MIN_SPEED 10 // allows for 5 bounces before it goes through
+#define HM_IMAGE 0 // 0 is just a sphere that can change size, 1 is a little person
 // Shield Rules
 #define SHIELD_INITIAL_X 64
-#define SHIELD_INITIAL_Y 119
+#define SHIELD_INITIAL_Y 93
 #define SHIELD_MAX_FORCE 20 //N
 #define SHIELD_MASS 10 //kg
 #define SHIELD_LENGTH 40 //cm
@@ -148,6 +152,8 @@ struct shield_data {
   int xVel;
   int xAccl;
   int forceApplied;
+  int enhanced;
+  int timeEnhanced;
 };
 
 //----------------------------------------------------------------------------------------------------------------------------------
@@ -163,6 +169,17 @@ struct holtzmann_data {
   int xForce;
   int yForce;
 };
+
+//----------------------------------------------------------------------------------------------------------------------------------
+/// @brief Structure which holds the game data.
+//----------------------------------------------------------------------------------------------------------------------------------
+struct game_data {
+  int game_over;
+  int num_HM_left;
+  int laser_active;
+  int num_laser_left;
+};
+
 /***************************************************************************//**
  * Initialize blink example
  ******************************************************************************/

@@ -58,7 +58,9 @@ struct shield_data shield = { .xPos = SHIELD_INITIAL_X,
                               .yPos = SHIELD_INITIAL_Y,
                               .xVel = 0,
                               .xAccl = 0,
-                              .forceApplied = 0
+                              .forceApplied = 0,
+                              .enhanced = 0,
+                              .timeEnhanced = 0
                             };
 
 struct holtzmann_data holtzmann = { .xAccl = 0,
@@ -70,6 +72,12 @@ struct holtzmann_data holtzmann = { .xAccl = 0,
                                     .yPos = 0,
                                     .yVel = 0
                                    };
+
+struct game_data game = { .game_over = 0,
+                          .laser_active = 0,
+                          .num_HM_left = HM_NUM,
+                          .num_laser_left = NUM_LASERS
+                        };
 
 // ---------------- FINAL PROJECT TASKS ------------------------------------- //
 // LCD Display Task
@@ -111,14 +119,18 @@ static OS_FLAG_GRP led0_flag_group;
 static OS_FLAG_GRP led1_flag_group;
 
 enum direction_vals {STRAIGHT = 0, HARD_LEFT = 1, SOFT_LEFT = 2, SOFT_RIGHT = 3, HARD_RIGHT = 4};
+enum touching_wall {LEFT_WALL = 0, RIGHT_WALL = 1, NO_WALL = -1};
 
 // LCD Task Stuff
 static GLIB_Context_t glibContext;
 static volatile uint32_t msTicks = 0;
 
 // Canyon Walls Stuff
-int left_wall_x = (128 - CANYON_SIZE)/2;
-int right_wall_x = (128 - CANYON_SIZE)/2 + CANYON_SIZE;
+#define LEFT_WALL_X (128 - CANYON_SIZE)/2
+#define RIGHT_WALL_X (128 - CANYON_SIZE)/2 + CANYON_SIZE
+
+// DEBUG ----------------------------------------------------------------------
+char print_string[2];
 
 // -------------------------------------------------------------------------- //
 
@@ -134,11 +146,19 @@ static void led0_update_task(void *arg);
 static void led1_update_task(void *arg);
 static void idle_task(void *arg);
 static void lcd_output_task(void *arg);
+void laser_valid(int num_lasers, int * data);
+int shield_touching_wall(int shieldX);
+int hm_touching_shield(int hmX, int hmY, int shieldX, int shieldY);
+int hm_touching_wall(int hmX);
+void update_hm_x_physics(int xForce, int xAccl, int xVel, int xPos, int touchingWall, int * hm_data);
+void update_hm_y_physics(int yForce, int yAccl, int yVel, int yPos, int shieldY, int touchingShield, int * hm_data);
+void update_shield_physics(int force, int xVel, int xAccl, int xPos, int touchingWall, int * shield_data);
 
 int read_capsense();
 void draw_holtzmann(int xPos, int yPos, GLIB_Context_t * glibContext);
 void draw_shield(int xPos, int yPos, GLIB_Context_t * glibContext);
 void draw_canyon(GLIB_Context_t * glibContext);
+void draw_town(GLIB_Context_t * glibContext);
 // -------------------------------------------------------------------------- //
 
 /*******************************************************************************
@@ -155,6 +175,10 @@ void GPIO_EVEN_IRQHandler(void)
   RTOS_ERR err;
 
   // Post BTN0 Semaphore
+  OSSemPost (&btn0_semaphore,
+             OS_OPT_POST_ALL,
+             &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
   // clear interrupt flag?
   uint32_t int_flag = GPIO->IF & GPIO->IEN;
@@ -169,6 +193,12 @@ void GPIO_ODD_IRQHandler(void)
 {
 //  read_button1();
   RTOS_ERR err;
+
+  // Post BTN0 Semaphore
+  OSSemPost (&btn1_semaphore,
+             OS_OPT_POST_ALL,
+             &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
   // do stuff with timer to tell if button pressed close enough to collision
   // post BTN1 Semaphore
@@ -265,20 +295,20 @@ void blink_init(void)
 
   // ------------------ CREATE FINAL PROJECT TASKS -------------------------- //
   // Laser Update Task
-//  OSTaskCreate(&laser_tcb,
-//               "laser update task",
-//               laser_update_task,
-//               DEF_NULL,
-//               LASER_TASK_PRIO,
-//               &laser_stack[0],
-//               (LASER_TASK_STACK_SIZE / 10u),
-//               LASER_TASK_STACK_SIZE,
-//               0u,
-//               0u,
-//               DEF_NULL,
-//               (OS_OPT_TASK_STK_CLR),
-//               &err);
-//  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+  OSTaskCreate(&laser_tcb,
+               "laser update task",
+               laser_update_task,
+               DEF_NULL,
+               LASER_TASK_PRIO,
+               &laser_stack[0],
+               (LASER_TASK_STACK_SIZE / 10u),
+               LASER_TASK_STACK_SIZE,
+               0u,
+               0u,
+               DEF_NULL,
+               (OS_OPT_TASK_STK_CLR),
+               &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
   // Shield Enhance Task
 //  OSTaskCreate(&shield_enhance_tcb,
 //               "shield enhance task",
@@ -416,13 +446,93 @@ static void idle_task(void *arg)
  * Laser Update Task.
  ******************************************************************************/
 static void laser_update_task(void *arg) {
+  RTOS_ERR err;
+  PP_UNUSED_PARAM(arg);
 
+  while(1) {
+      // call OS function to pend on BTN0 semaphore
+      OSSemPend(&btn0_semaphore,
+                 0,
+                 OS_OPT_PEND_BLOCKING,
+                 NULL,
+                 &err);
+      EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+      // once here we know button0 has just been pressed
+      // can now get a mutex on the game data to update the lasers
+      // pend on game data mutex
+      OSMutexPend(&game_mutex,
+                  0,
+                  OS_OPT_PEND_BLOCKING,
+                  0,
+                  &err);
+      EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+//      // update game laser-data
+//      if(game.num_laser_left > 0) {
+//        game.laser_active = 1;
+//        game.num_laser_left--;
+//      }
+
+      int laser_active[2];
+      laser_valid(game.num_laser_left, laser_active);
+      game.num_laser_left = laser_active[1];
+      game.laser_active = laser_active[0];
+
+      // post on shield data mutex
+      OSMutexPost (&game_mutex,
+                   OS_OPT_POST_NONE,
+                   &err);
+      EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+  }
+}
+
+void laser_valid(int num_lasers, int * data) {
+  data[0] = 0;
+  data[1] = num_lasers;
+  if(num_lasers > 0) {
+      data[0] = 1;
+      data[1]--;
+  }
 }
 
 /***************************************************************************//**
  * Shield Enhance Task.
  ******************************************************************************/
 static void shield_enhance_task(void *arg) {
+  RTOS_ERR err;
+  PP_UNUSED_PARAM(arg);
+
+  while(1) {
+      // call OS function to pend on BTN1 semaphore
+      OSSemPend(&btn1_semaphore,
+                 0,
+                 OS_OPT_PEND_BLOCKING,
+                 NULL,
+                 &err);
+      EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+      // once here, we know button1 has just been pressed
+      // can now get a mutex on the shield data to set shield to enhanced and set time shield was enhanced
+      // pend on shield data mutex
+      OSMutexPend(&shield_mutex,
+                  0,
+                  OS_OPT_PEND_BLOCKING,
+                  0,
+                  &err);
+      EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+      // update shield enhance-data
+      shield.enhanced = 1;
+      shield.timeEnhanced = OSTimeGet(&err);
+      EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+      // post on shield data mutex
+      OSMutexPost (&shield_mutex,
+                   OS_OPT_POST_NONE,
+                   &err);
+      EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+  }
 
 }
 
@@ -444,7 +554,8 @@ static void shield_force_task(void *arg) {
   while (1)
   {
       // call OSTimeDly to delay between each loop iteration
-      OSTimeDly(10, OS_OPT_TIME_DLY, &err);
+      OSTimeDly(20, OS_OPT_TIME_DLY, &err);
+      EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
       // add call to read capacitive touch slider
       int curr_dir = read_capsense();
@@ -502,7 +613,8 @@ static void physics_update_task(void *arg) {
   while (1)
   {
     // call OSTimeDly to delay between each loop iteration
-    OSTimeDly(120, OS_OPT_TIME_DLY, &err);
+    OSTimeDly(100, OS_OPT_TIME_DLY, &err);
+
     // pend on shield data mutex
     OSMutexPend(&shield_mutex,
                 0,
@@ -511,31 +623,15 @@ static void physics_update_task(void *arg) {
                 &err);
     EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
-    // update shield data
-    shield.xAccl = shield.forceApplied/SHIELD_MASS;
-    shield.xVel = shield.xVel + shield.xAccl;
-    shield.xPos = shield.xPos + shield.xVel;
-
     // check if touching a wall -> if so reverse its velocity and make acceleration 0
-    if(shield.xPos - SHIELD_LENGTH/2 < left_wall_x) {
-        if(SHIELD_BOUNCE_ENABLED)
-          shield.xVel = -shield.xVel - 1;
-        else
-          shield.xVel = 0;
-        shield.xAccl = 0;
-        shield.forceApplied = 0;
-        shield.xPos = left_wall_x + 1 + SHIELD_LENGTH/2;
-    }
+    int shield_collides_wall = shield_touching_wall(shield.xPos);
+    int shield_physics_data[4];
+    update_shield_physics(shield.forceApplied, shield.xVel, shield.xAccl, shield.xPos, shield_collides_wall, shield_physics_data);
 
-    if(shield.xPos + SHIELD_LENGTH/2 > right_wall_x) {
-        if(SHIELD_BOUNCE_ENABLED)
-          shield.xVel = -shield.xVel + 1;
-        else
-          shield.xVel = 0;
-        shield.xAccl = 0;
-        shield.forceApplied = 0;
-        shield.xPos = right_wall_x - 1 - SHIELD_LENGTH/2;
-    }
+    shield.forceApplied = shield_physics_data[0];
+    shield.xAccl = shield_physics_data[1];
+    shield.xVel = shield_physics_data[2];
+    shield.xPos = shield_physics_data[3];
 
     // pend on holtzmann data mutex
     OSMutexPend(&holtzmann_mutex,
@@ -545,23 +641,13 @@ static void physics_update_task(void *arg) {
                 &err);
     EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
-    // update holtzmann data
-    holtzmann.xAccl = holtzmann.xForce/HM_MASS;
-    holtzmann.yAccl = holtzmann.yForce/HM_MASS;
-    holtzmann.xVel = holtzmann.xVel + holtzmann.xAccl;
-    holtzmann.yVel = holtzmann.yVel + holtzmann.yAccl;
-    holtzmann.xPos = holtzmann.xPos + holtzmann.xVel;
-    holtzmann.yPos = holtzmann.yPos + holtzmann.yVel;
+    int hm_collides_shield = hm_touching_shield(holtzmann.xPos, holtzmann.yPos, shield.xPos, shield.yPos);
+    int hm_y_physics_data[3];
+    update_hm_y_physics(holtzmann.yForce, holtzmann.yAccl, holtzmann.yVel, holtzmann.yPos, shield.yPos, hm_collides_shield, hm_y_physics_data);
 
-    // check if holtzmann mass touching platform -> if so reverse its y velocity
-    if(holtzmann.yPos + HM_DIAM/2 > shield.yPos - SHIELD_HEIGHT/2 &&
-       holtzmann.xPos < shield.xPos + SHIELD_LENGTH/2 &&
-       holtzmann.xPos > shield.xPos - SHIELD_LENGTH/2 &&
-       holtzmann.yPos - HM_DIAM/2 < shield.yPos + SHIELD_HEIGHT/2)
-    {
-       holtzmann.yVel = -holtzmann.yVel + 1;
-       holtzmann.yPos = shield.yPos - SHIELD_HEIGHT/2 - HM_DIAM/2;
-    }
+    holtzmann.yAccl = hm_y_physics_data[0];
+    holtzmann.yVel = hm_y_physics_data[1];
+    holtzmann.yPos = hm_y_physics_data[2];
 
     // post on shield data mutex
     OSMutexPost (&shield_mutex,
@@ -570,22 +656,38 @@ static void physics_update_task(void *arg) {
     EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
     // check if holtzmann mass touching wall -> if so reverse its x velocity and make x acceleration 0
-    if(holtzmann.xPos - HM_DIAM/2 < left_wall_x) {
-        holtzmann.xVel = -holtzmann.xVel;
-        holtzmann.xAccl = 0;
-        holtzmann.xPos = left_wall_x + HM_DIAM/2;
-    }
+    int hm_collides_wall = hm_touching_wall(holtzmann.xPos);
+    int hm_x_physics_data[3];
+    update_hm_x_physics(holtzmann.xForce, holtzmann.xAccl, holtzmann.xVel, holtzmann.xPos, hm_collides_wall, hm_x_physics_data);
 
-    if(holtzmann.xPos + HM_DIAM/2 > right_wall_x) {
-        holtzmann.xVel = -holtzmann.xVel;
-        holtzmann.xAccl = 0;
-        holtzmann.xPos = right_wall_x - 1 - HM_DIAM/2;
-    }
+    holtzmann.xAccl = hm_x_physics_data[0];
+    holtzmann.xVel = hm_x_physics_data[1];
+    holtzmann.xPos = hm_x_physics_data[2];
 
     // if holtzmann mass goes off bottom of screen
     if(holtzmann.yPos > 150) {
       holtzmann.yPos = 0;
       holtzmann.yVel = 0;
+    }
+
+    // pend on game data mutex
+    OSMutexPend(&game_mutex,
+                0,
+                OS_OPT_PEND_BLOCKING,
+                0,
+                &err);
+    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+    // update game data
+    if(game.laser_active) {
+        game.num_HM_left--; // one HM destroyed
+        holtzmann.yPos = 0; // reset HM position
+        holtzmann.yVel = 0; // and velocity
+        game.laser_active = 0;
+    }
+
+    if(holtzmann.yPos < SHIELD_INITIAL_Y - 0.5*SHIELD_HEIGHT) {
+        game.game_over = 1;
     }
 
     // post on holtzmann data mutex
@@ -594,6 +696,274 @@ static void physics_update_task(void *arg) {
                  &err);
     EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
+    // post on shield data mutex
+    OSMutexPost (&game_mutex,
+                 OS_OPT_POST_NONE,
+                 &err);
+    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+
+  }
+}
+
+//static void physics_update_task(void *arg) {
+//  PP_UNUSED_PARAM(arg);
+//  RTOS_ERR err;
+//  // update the position, velocity, and acceleration of the Shield Platform
+//    // if ax = 0, velocity unchanged, else velocity changes
+//    // if vx = 0, position unchanged, else position changes
+//    // if finger on slider, constant acceleration applied
+//    // if platform collides with wall,
+//  // update the position, velocity, and acceleration of the Holtzmann Mass
+//
+//  // infinite while loop
+//  while (1)
+//  {
+//    // call OSTimeDly to delay between each loop iteration
+//    OSTimeDly(120, OS_OPT_TIME_DLY, &err);
+//
+//    // pend on shield data mutex
+//    OSMutexPend(&shield_mutex,
+//                0,
+//                OS_OPT_PEND_BLOCKING,
+//                0,
+//                &err);
+//    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+//
+//    // update shield data
+//    shield.xAccl = shield.forceApplied/SHIELD_MASS;
+//    shield.xVel = shield.xVel + shield.xAccl;
+//    shield.xPos = shield.xPos + shield.xVel;
+//
+//    // check if touching a wall -> if so reverse its velocity and make acceleration 0
+//    if(shield.xPos - SHIELD_LENGTH/2 < LEFT_WALL_X) {
+//        if(SHIELD_BOUNCE_ENABLED)
+//          shield.xVel = -shield.xVel - 1;
+//        else
+//          shield.xVel = 0;
+//        shield.xAccl = 0;
+//        shield.forceApplied = 0;
+//        shield.xPos = LEFT_WALL_X + 1 + SHIELD_LENGTH/2;
+//    }
+//
+//    if(shield.xPos + SHIELD_LENGTH/2 > RIGHT_WALL_X) {
+//        if(SHIELD_BOUNCE_ENABLED)
+//          shield.xVel = -shield.xVel + 1;
+//        else
+//          shield.xVel = 0;
+//        shield.xAccl = 0;
+//        shield.forceApplied = 0;
+//        shield.xPos = RIGHT_WALL_X - 1 - SHIELD_LENGTH/2;
+//    }
+//
+//    // pend on holtzmann data mutex
+//    OSMutexPend(&holtzmann_mutex,
+//                0,
+//                OS_OPT_PEND_BLOCKING,
+//                0,
+//                &err);
+//    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+//
+//    // update holtzmann data
+//    holtzmann.xAccl = holtzmann.xForce/HM_MASS;
+//    holtzmann.yAccl = holtzmann.yForce/HM_MASS;
+//    holtzmann.xVel = holtzmann.xVel + holtzmann.xAccl;
+//    holtzmann.yVel = holtzmann.yVel + holtzmann.yAccl;
+//    holtzmann.xPos = holtzmann.xPos + holtzmann.xVel;
+//    holtzmann.yPos = holtzmann.yPos + holtzmann.yVel;
+//
+//    // check if holtzmann mass touching platform
+//      // -> if so
+//    if(holtzmann.yPos + HM_DIAM/2 > shield.yPos - SHIELD_HEIGHT/2 &&
+//       holtzmann.xPos < shield.xPos + SHIELD_LENGTH/2 &&
+//       holtzmann.xPos > shield.xPos - SHIELD_LENGTH/2 &&
+//       holtzmann.yPos - HM_DIAM/2 < shield.yPos + SHIELD_HEIGHT/2)
+//    {
+//
+//       holtzmann.yVel = -holtzmann.yVel + 1;
+//       holtzmann.yPos = shield.yPos - SHIELD_HEIGHT/2 - HM_DIAM/2;
+//       // -> go through the shield IF HM velocity is too slow holtzmann.yVel < HM_MIN_SPEED
+////       if(holtzmann.yVel < HM_MIN_SPEED) {
+////           holtzmann.yPos =
+////       }
+//       // -> reverse and increase magnitude of y velocity IF enhanced shield by SHIELD_ENERGY_INCREASE %
+//         // -> shield is enhanced IF currentTime - shield.timeEnhanced <= SHIELD_ARMING_WINDOW
+//       // -> reverse its y velocity IF not enhanced shield by SHIELD_ENERGY_REDUCTION % KE = 0.5*m*v^2 -> v = sqrt(2*KE/m)
+//    }
+//
+//    // post on shield data mutex
+//    OSMutexPost (&shield_mutex,
+//                 OS_OPT_POST_NONE,
+//                 &err);
+//    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+//
+//    // check if holtzmann mass touching wall -> if so reverse its x velocity and make x acceleration 0
+//    if(holtzmann.xPos - HM_DIAM/2 < LEFT_WALL_X) {
+//        holtzmann.xVel = -holtzmann.xVel;
+//        holtzmann.xAccl = 0;
+//        holtzmann.xPos = LEFT_WALL_X + HM_DIAM/2;
+//    }
+//
+//    if(holtzmann.xPos + HM_DIAM/2 > RIGHT_WALL_X) {
+//        holtzmann.xVel = -holtzmann.xVel;
+//        holtzmann.xAccl = 0;
+//        holtzmann.xPos = RIGHT_WALL_X - 1 - HM_DIAM/2;
+//    }
+//
+//    // if holtzmann mass goes off bottom of screen
+//    if(holtzmann.yPos > 150) {
+//      holtzmann.yPos = 0;
+//      holtzmann.yVel = 0;
+//    }
+//
+//    // pend on game data mutex
+//    OSMutexPend(&game_mutex,
+//                0,
+//                OS_OPT_PEND_BLOCKING,
+//                0,
+//                &err);
+//    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+//
+//    // update game data
+//    if(game.laser_active) {
+//        game.num_HM_left--; // one HM destroyed
+//        holtzmann.yPos = 0; // reset HM position
+//        holtzmann.yVel = 0; // and velocity
+//        game.laser_active = 0;
+//    }
+//
+//    if(holtzmann.yPos < SHIELD_INITIAL_Y - 0.5*SHIELD_HEIGHT) {
+//        game.game_over = 1;
+//    }
+//
+//    // post on holtzmann data mutex
+//    OSMutexPost (&holtzmann_mutex,
+//                 OS_OPT_POST_NONE,
+//                 &err);
+//    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+//
+//    // post on shield data mutex
+//    OSMutexPost (&game_mutex,
+//                 OS_OPT_POST_NONE,
+//                 &err);
+//    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+//
+//
+//  }
+//}
+
+// returns 0 for left wall and 1 for right wall and -1 for niether
+int shield_touching_wall(int shieldX) {
+  // check if touching a wall -> if so reverse its velocity and make acceleration 0
+  if(shieldX - SHIELD_LENGTH/2 < LEFT_WALL_X) {
+      return LEFT_WALL;
+  }
+  else if(shieldX + SHIELD_LENGTH/2 > RIGHT_WALL_X) {
+      return RIGHT_WALL;
+  }
+  else {
+      return NO_WALL;
+  }
+}
+
+int hm_touching_wall(int hmX) {
+  // check if holtzmann mass touching wall -> if so reverse its x velocity and make x acceleration 0
+  if(hmX - HM_DIAM/2 < LEFT_WALL_X) {
+      return LEFT_WALL;
+  }
+  else if(hmX + HM_DIAM/2 > RIGHT_WALL_X) {
+      return RIGHT_WALL;
+  }
+  else {
+      return NO_WALL;
+  }
+}
+
+int hm_touching_shield(int hmX, int hmY, int shieldX, int shieldY) {
+  // check if holtzmann mass touching platform
+  if(hmY + HM_DIAM/2 > shieldY - SHIELD_HEIGHT/2 &&
+      hmX < shieldX + SHIELD_LENGTH/2 &&
+      hmX > shieldX - SHIELD_LENGTH/2 &&
+      hmY - HM_DIAM/2 < shieldY + SHIELD_HEIGHT/2)
+  {
+      return 1;
+  }
+  else {
+      return 0;
+  }
+}
+
+void update_hm_x_physics(int xForce, int xAccl, int xVel, int xPos, int touchingWall, int * hm_data) {
+
+  // not touching a wall, business as usual
+  hm_data[1] = xVel + xAccl; // xVel
+  hm_data[0] = xForce/HM_MASS; // xAccl
+  hm_data[2] = xPos + xVel; // xPos
+
+  // check if holtzmann mass touching wall -> if so reverse its x velocity and make x acceleration 0
+  if(touchingWall == LEFT_WALL) {
+    hm_data[1] = -xVel; // xVel
+    hm_data[0] = 0; // xAccl
+    hm_data[2] = LEFT_WALL_X + HM_DIAM/2; // xPos
+  }
+  else if(touchingWall == RIGHT_WALL) {
+    hm_data[1] = -xVel; // xVel
+    hm_data[0] = 0; // xAccl
+    hm_data[2] = RIGHT_WALL_X - 1 - HM_DIAM/2; // xPo
+  }
+
+}
+
+void update_hm_y_physics(int yForce, int yAccl, int yVel, int yPos, int shieldY, int touchingShield, int * hm_data) {
+
+  // not touching platform, just keeps falling
+  hm_data[0] = yForce/HM_MASS; // yAccl
+  hm_data[1] = yVel + yAccl; // yVel
+  hm_data[2] = yPos + yVel; // yPos
+
+  // Y physics depends on touching platform or not && on the boost applied from enhanced shield
+  if(touchingShield && yVel >= HM_MIN_SPEED) {
+    hm_data[1] = -yVel + 3; // yVel
+    hm_data[2] = shieldY - SHIELD_HEIGHT/2 - HM_DIAM/2; // yPos
+    hm_data[0] = 0; // yAccl
+    // -> reverse its y velocity IF not enhanced shield by SHIELD_ENERGY_REDUCTION % KE = 0.5*m*v^2 -> v = sqrt(2*KE/m)
+  }
+  else if(touchingShield && yVel < HM_MIN_SPEED) {
+      hm_data[2] = shieldY + SHIELD_HEIGHT/2 + HM_DIAM/2; // yPos
+  }
+
+  // -> reverse and increase magnitude of y velocity IF enhanced shield by SHIELD_ENERGY_INCREASE %
+  // -> shield is enhanced IF currentTime - shield.timeEnhanced <= SHIELD_ARMING_WINDOW
+
+}
+
+void update_shield_physics(int force, int xVel, int xAccl, int xPos, int touchingWall, int * shield_data) {
+
+  // means shield is not colliding with wall, just give it regular old physics
+  shield_data[1] = force/SHIELD_MASS; // xAccl
+  shield_data[2] = xVel + xAccl; // xVel
+  shield_data[3] = xPos + xVel; // xPos
+  shield_data[0] = force;       // forceApplied
+
+  // include wall touching logic that changes shield physics stuff
+  // check if touching a wall -> if so reverse its velocity and make acceleration 0
+  if(touchingWall == LEFT_WALL) {
+      if(SHIELD_BOUNCE_ENABLED)
+        shield_data[2] = -xVel - 1; // reverse velocity (and take away some speed)
+      else
+        shield_data[2] = 0; // reverse velocity (leave speed intact)
+      shield_data[1] = 0; // xAccl = 0
+      shield_data[0] = 0; // force = 0
+      shield_data[3] = LEFT_WALL_X + 1 + SHIELD_LENGTH/2; // xPos
+  }
+  else if(touchingWall == RIGHT_WALL) {
+      if(SHIELD_BOUNCE_ENABLED)
+        shield_data[2] = -xVel + 1; // xVel reversed (less speed)
+      else
+        shield_data[2] = 0; // xVel reversed (same speed)
+      shield_data[1] = 0; // xAccl = 0
+      shield_data[0] = 0; // force = 0
+      shield_data[3] = RIGHT_WALL_X - 1 - SHIELD_LENGTH/2; // xPos
   }
 }
 
@@ -669,9 +1039,19 @@ static void lcd_output_task(void *arg)
                      &err);
         EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
+        draw_town(&glibContext);
         draw_holtzmann(holtzmann_xPos, holtzmann_yPos, &glibContext);
         draw_shield(shield_xPos, shield_yPos, &glibContext);
         draw_canyon(&glibContext);
+
+        // DEBUG PRINT ---------------------------------------------------------------
+        GLIB_drawString (&glibContext,
+                         &print_string,
+                         strlen(print_string),
+                         5,
+                         5,
+                         true
+        );
 
         DMD_updateDisplay();
     }
@@ -692,16 +1072,31 @@ int read_capsense() {
 
   int slider_dir;
 
-  if(far_left && !right && !far_right)
+  if(far_left && !right && !far_right) {
     slider_dir = HARD_LEFT;
-  else if (left && !right && !far_right)
+    print_string[0] = 'H';
+    print_string[1] = 'L';
+  }
+  else if (left && !right && !far_right) {
     slider_dir = SOFT_LEFT;
-  else if (!far_left && !left && right)
+    print_string[0] = 'S';
+    print_string[1] = 'L';
+  }
+  else if (!far_left && !left && right) {
     slider_dir = SOFT_RIGHT;
-  else if (!far_left && !left && far_right)
+    print_string[0] = 'S';
+    print_string[1] = 'R';
+  }
+  else if (!far_left && !left && far_right) {
     slider_dir = HARD_RIGHT;
-  else
+    print_string[0] = 'H';
+    print_string[1] = 'R';
+  }
+  else {
     slider_dir = STRAIGHT;
+    print_string[0] = 'S';
+    print_string[1] = 'T';
+  }
 
   return slider_dir;
 }
@@ -712,10 +1107,15 @@ int read_capsense() {
  ******************************************************************************/
 void draw_holtzmann(int xPos, int yPos, GLIB_Context_t * glibContext) {
 
-  GLIB_drawCircleFilled(glibContext,
-                        xPos,
-                        yPos,
-                        HM_DIAM/2);
+  if(HM_IMAGE == 0) {
+    GLIB_drawCircleFilled(glibContext,
+                          xPos,
+                          yPos,
+                          HM_DIAM/2);
+  }
+  else if(HM_IMAGE == 1) {
+      GLIB_drawBitmap(glibContext, xPos-0.5*PERSON2_WIDTH, yPos-0.5*PERSON2_HEIGHT, PERSON2_WIDTH, PERSON2_HEIGHT, person2_bits);
+  }
 }
 
 /***************************************************************************//**
@@ -742,13 +1142,13 @@ void draw_canyon(GLIB_Context_t * glibContext) {
   GLIB_Rectangle_t left_wall;
   GLIB_Rectangle_t right_wall;
 
-  left_wall.xMax = left_wall_x;
+  left_wall.xMax = LEFT_WALL_X;
   left_wall.xMin = 0;
   left_wall.yMax = 128;
   left_wall.yMin = 0;
 
   right_wall.xMax = 128;
-  right_wall.xMin = right_wall_x;
+  right_wall.xMin = RIGHT_WALL_X;
   right_wall.yMax = 128;
   right_wall.yMin = 0;
 
@@ -757,4 +1157,12 @@ void draw_canyon(GLIB_Context_t * glibContext) {
 
   GLIB_drawRectFilled(glibContext,
                       &right_wall);
+}
+
+/***************************************************************************//**
+ * @brief
+ *   Draw town on LCD screen at bottom of canyon.
+ ******************************************************************************/
+void draw_town(GLIB_Context_t * glibContext) {
+  GLIB_drawBitmap(glibContext, 0, 0, TOWN_WIDTH, TOWN_HEIGHT, town_bits);
 }

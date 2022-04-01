@@ -103,6 +103,8 @@ src/Source_Files/app.o: ../src/Source_Files/app.c \
  c\:\siliconlabs\simplicitystudio\v5\developer\sdks\gecko_sdk_suite\v3.2\platform\service\sleeptimer\inc\sl_sleeptimer.h \
  C\:\Users\Carson\SimplicityStudio\v5_workspace\z_Final_Project\config/sl_sleeptimer_config.h \
  c\:\siliconlabs\simplicitystudio\v5\developer\sdks\gecko_sdk_suite\v3.2\platform\common\inc\sl_status.h \
+ C\:\Users\Carson\SimplicityStudio\v5_workspace\z_Final_Project\src\Header_Files/town.h \
+ C\:\Users\Carson\SimplicityStudio\v5_workspace\z_Final_Project\src\Header_Files/person2.h \
  C\:\Users\Carson\SimplicityStudio\v5_workspace\z_Final_Project\src\Header_Files/app.h
 c\:\siliconlabs\simplicitystudio\v5\developer\sdks\gecko_sdk_suite\v3.2\platform\common\toolchain\inc\sl_gcc_preinclude.h:
 C\:\Users\Carson\SimplicityStudio\v5_workspace\z_Final_Project\src\Header_Files/blink.h:
@@ -208,4 +210,6 @@ c\:\siliconlabs\simplicitystudio\v5\developer\sdks\gecko_sdk_suite\v3.2\platform
 c\:\siliconlabs\simplicitystudio\v5\developer\sdks\gecko_sdk_suite\v3.2\platform\service\sleeptimer\inc\sl_sleeptimer.h:
 C\:\Users\Carson\SimplicityStudio\v5_workspace\z_Final_Project\config/sl_sleeptimer_config.h:
 c\:\siliconlabs\simplicitystudio\v5\developer\sdks\gecko_sdk_suite\v3.2\platform\common\inc\sl_status.h:
+C\:\Users\Carson\SimplicityStudio\v5_workspace\z_Final_Project\src\Header_Files/town.h:
+C\:\Users\Carson\SimplicityStudio\v5_workspace\z_Final_Project\src\Header_Files/person2.h:
 C\:\Users\Carson\SimplicityStudio\v5_workspace\z_Final_Project\src\Header_Files/app.h:
