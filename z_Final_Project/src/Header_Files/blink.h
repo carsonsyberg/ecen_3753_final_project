@@ -120,7 +120,7 @@ struct direction_data {
 #define HM_INITIAL_X_VELOCITY 0 //cm/s
 #define HM_INITIAL_Y_VELOCITY 0 //cm/s
 #define HM_INITIAL_X_POSITION 64 //mm
-#define HM_INITIAL_Y_POSITION 0
+#define HM_INITIAL_Y_POSITION 25
 #define HM_USER_DEFINED_MODE_INPUT 0 //i.e. 8x32b set aside for user-defined mode params
 #define HM_MASS 10
 #define HM_MIN_SPEED 10 // allows for 5 bounces before it goes through
@@ -135,10 +135,10 @@ struct direction_data {
 #define SHIELD_BOUNCE_LIMITED 0 //T/F
 #define SHIELD_MAX_BOUNCE_SPEED //cm/s
 #define SHIELD_AUTO_CONTROL 0 //T/F
-#define SHIELD_ENERGY_REDUCTION 0 //exclusively passive bounce kinetic energy reduction %
-#define SHIELD_ENERGY_INCREASE 0 //kinetic energy increase %
-#define SHIELD_ARMING_WINDOW 0 //ms
-#define SHIELD_RECHARGE_TIME 0 //ms
+#define SHIELD_ENERGY_REDUCTION 3 //exclusively passive bounce kinetic energy reduction %
+#define SHIELD_ENERGY_INCREASE 2 //kinetic energy increase %
+#define SHIELD_ARMING_WINDOW 1000 //ms
+#define SHIELD_RECHARGE_TIME 1000 //ms
 // Laser Rules
 #define NUM_LASERS 10
 #define AUTO_LASERS 0 //T/F
@@ -154,6 +154,7 @@ struct shield_data {
   int forceApplied;
   int enhanced;
   int timeEnhanced;
+  int timeUnenhanced;
 };
 
 //----------------------------------------------------------------------------------------------------------------------------------

@@ -22,6 +22,7 @@
 #include "queue.h"
 #include "glib.h"
 #include "dmd.h"
+#include <math.h>
 #include "sl_board_control.h"
 #include "sl_board_control_config.h"
 
@@ -60,7 +61,8 @@ struct shield_data shield = { .xPos = SHIELD_INITIAL_X,
                               .xAccl = 0,
                               .forceApplied = 0,
                               .enhanced = 0,
-                              .timeEnhanced = 0
+                              .timeEnhanced = 0,
+                              .timeUnenhanced = 0
                             };
 
 struct holtzmann_data holtzmann = { .xAccl = 0,
@@ -69,7 +71,7 @@ struct holtzmann_data holtzmann = { .xAccl = 0,
                                     .xVel = HM_INITIAL_X_VELOCITY,
                                     .yAccl = 0,
                                     .yForce = GRAVITY,
-                                    .yPos = 0,
+                                    .yPos = HM_INITIAL_Y_POSITION,
                                     .yVel = 0
                                    };
 
@@ -106,7 +108,7 @@ static CPU_STK led1_stack[LED1_TASK_STACK_SIZE];
 // BTN0 Semaphore
 static OS_SEM btn0_semaphore;
 // BTN1 Semaphore
-static OS_SEM btn1_semaphore;
+static OS_FLAG_GRP btn1_flag_group;
 // ShieldData Mutex
 static OS_MUTEX shield_mutex;
 // HoltzmannData Mutex
@@ -120,6 +122,7 @@ static OS_FLAG_GRP led1_flag_group;
 
 enum direction_vals {STRAIGHT = 0, HARD_LEFT = 1, SOFT_LEFT = 2, SOFT_RIGHT = 3, HARD_RIGHT = 4};
 enum touching_wall {LEFT_WALL = 0, RIGHT_WALL = 1, NO_WALL = -1};
+enum event_flags {BUTTON_DOWN = 1, BUTTON_UP = 2}; // need to be 1 and 2 since they are bits 0001, 0010
 
 // LCD Task Stuff
 static GLIB_Context_t glibContext;
@@ -131,6 +134,7 @@ static volatile uint32_t msTicks = 0;
 
 // DEBUG ----------------------------------------------------------------------
 char print_string[2];
+int first_interrupt = 0;
 
 // -------------------------------------------------------------------------- //
 
@@ -151,7 +155,7 @@ int shield_touching_wall(int shieldX);
 int hm_touching_shield(int hmX, int hmY, int shieldX, int shieldY);
 int hm_touching_wall(int hmX);
 void update_hm_x_physics(int xForce, int xAccl, int xVel, int xPos, int touchingWall, int * hm_data);
-void update_hm_y_physics(int yForce, int yAccl, int yVel, int yPos, int shieldY, int touchingShield, int * hm_data);
+void update_hm_y_physics(int yForce, int yAccl, int yVel, int yPos, int shieldY, int touchingShield, int shieldEnhanced, int * hm_data);
 void update_shield_physics(int force, int xVel, int xAccl, int xPos, int touchingWall, int * shield_data);
 
 int read_capsense();
@@ -194,15 +198,27 @@ void GPIO_ODD_IRQHandler(void)
 //  read_button1();
   RTOS_ERR err;
 
-  // Post BTN0 Semaphore
-  OSSemPost (&btn1_semaphore,
-             OS_OPT_POST_ALL,
-             &err);
-  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
-  // do stuff with timer to tell if button pressed close enough to collision
-  // post BTN1 Semaphore
+  // 0 if pressed, 1 not pressed GPIO_PinInGet
+  uint32_t btn1_state = GPIO_PinInGet(BUTTON1_port, BUTTON1_pin);
 
+  // Post BTN0 Event Flag (depending on button up or button down)
+  if(!btn1_state) {
+    OSFlagPost (&btn1_flag_group,
+                BUTTON_DOWN,
+                OS_OPT_POST_FLAG_SET,
+                &err);
+    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+  }
+  if(btn1_state && first_interrupt != 0){
+    OSFlagPost (&btn1_flag_group,
+                BUTTON_UP,
+                OS_OPT_POST_FLAG_SET,
+                &err);
+    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+  }
+
+  first_interrupt = 1;
   // clear interrupt flag?uint32_t int_flag;
   uint32_t int_flag = GPIO->IF & GPIO->IEN;
   GPIO->IFC = int_flag;
@@ -259,11 +275,11 @@ void blink_init(void)
               0,
               &err);
   EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
-  // BTN1 Semaphore
-  OSSemCreate(&btn1_semaphore,
-              "BTN1 Semaphore",
-              1,
-              &err);
+  // BTN1 Flag Groupo
+  OSFlagCreate(&btn1_flag_group,
+               "BTN1 Pressed/Unpressed Flags",
+               0,
+               &err);
   EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
   // ShieldData Mutex
   OSMutexCreate(&shield_mutex,
@@ -310,20 +326,20 @@ void blink_init(void)
                &err);
   EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
   // Shield Enhance Task
-//  OSTaskCreate(&shield_enhance_tcb,
-//               "shield enhance task",
-//               shield_enhance_task,
-//               DEF_NULL,
-//               SHIELD_ENHANCE_TASK_PRIO,
-//               &shield_enhance_stack[0],
-//               (SHIELD_ENHANCE_TASK_STACK_SIZE / 10u),
-//               SHIELD_ENHANCE_TASK_STACK_SIZE,
-//               0u,
-//               0u,
-//               DEF_NULL,
-//               (OS_OPT_TASK_STK_CLR),
-//               &err);
-//  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+  OSTaskCreate(&shield_enhance_tcb,
+               "shield enhance task",
+               shield_enhance_task,
+               DEF_NULL,
+               SHIELD_ENHANCE_TASK_PRIO,
+               &shield_enhance_stack[0],
+               (SHIELD_ENHANCE_TASK_STACK_SIZE / 10u),
+               SHIELD_ENHANCE_TASK_STACK_SIZE,
+               0u,
+               0u,
+               DEF_NULL,
+               (OS_OPT_TASK_STK_CLR),
+               &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
   // Shield Force Task
   OSTaskCreate(&shield_force_tcb,
                "shield force task",
@@ -468,12 +484,6 @@ static void laser_update_task(void *arg) {
                   &err);
       EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
-//      // update game laser-data
-//      if(game.num_laser_left > 0) {
-//        game.laser_active = 1;
-//        game.num_laser_left--;
-//      }
-
       int laser_active[2];
       laser_valid(game.num_laser_left, laser_active);
       game.num_laser_left = laser_active[1];
@@ -501,15 +511,17 @@ void laser_valid(int num_lasers, int * data) {
  ******************************************************************************/
 static void shield_enhance_task(void *arg) {
   RTOS_ERR err;
+  OS_FLAGS flags_set;
   PP_UNUSED_PARAM(arg);
 
   while(1) {
       // call OS function to pend on BTN1 semaphore
-      OSSemPend(&btn1_semaphore,
-                 0,
-                 OS_OPT_PEND_BLOCKING,
-                 NULL,
-                 &err);
+      flags_set = OSFlagPend(&btn1_flag_group,
+                             BUTTON_UP | BUTTON_DOWN,
+                             0,
+                             OS_OPT_PEND_FLAG_SET_ANY + OS_OPT_PEND_FLAG_CONSUME + OS_OPT_PEND_BLOCKING,
+                             0,
+                             &err);
       EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
       // once here, we know button1 has just been pressed
@@ -522,9 +534,25 @@ static void shield_enhance_task(void *arg) {
                   &err);
       EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
-      // update shield enhance-data
-      shield.enhanced = 1;
-      shield.timeEnhanced = OSTimeGet(&err);
+      // update shield enhance-data -> shield only enhanced after button interrupt IF
+        // if you pulse the field by hitting the left button within a short interval before impact on the platform
+        // and holding it long enough for the bounce moment
+        //  the enhanced shield can only stay active for a short time
+        //  before it must be inactive for period of time (which it automatically enters when the button is released)
+
+      // shield enhanced if button pressed down AND msTicks - shield.timeUnenhanced >= SHIELD_RECHARGE_TIME
+      if((flags_set & BUTTON_DOWN) && (msTicks - shield.timeUnenhanced >= SHIELD_RECHARGE_TIME)) {
+        shield.enhanced = 1;
+        shield.timeEnhanced = msTicks;
+        shield.timeUnenhanced = 0;
+      }
+        // shield.timeUnenhanced = 0;
+      // shield no longer enhanced if button unpressed && shield.enhanced = 1
+      if((flags_set & BUTTON_UP) && shield.enhanced) {
+        shield.enhanced = 0;
+        shield.timeEnhanced = 0;
+        shield.timeUnenhanced = msTicks;
+      }
       EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
       // post on shield data mutex
@@ -642,8 +670,23 @@ static void physics_update_task(void *arg) {
     EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
     int hm_collides_shield = hm_touching_shield(holtzmann.xPos, holtzmann.yPos, shield.xPos, shield.yPos);
+    // once hm_collides_shield is true, we can check if the shield is still enhanced
+    if(hm_collides_shield) {
+        // (if shield.enhanced == 1, need to check if still within time range it works)
+        if(shield.enhanced) {
+            if(msTicks - shield.timeEnhanced > SHIELD_ARMING_WINDOW) {
+                // if not within time range means button got pressed too early before impact
+                EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+                shield.enhanced = 0;
+                shield.timeEnhanced = 0;
+                shield.timeUnenhanced = msTicks;
+                EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+            }
+        }
+        // if not, means button got released and isn't currently held down, no changes to shield.enhanced needed
+    }
     int hm_y_physics_data[3];
-    update_hm_y_physics(holtzmann.yForce, holtzmann.yAccl, holtzmann.yVel, holtzmann.yPos, shield.yPos, hm_collides_shield, hm_y_physics_data);
+    update_hm_y_physics(holtzmann.yForce, holtzmann.yAccl, holtzmann.yVel, holtzmann.yPos, shield.yPos, hm_collides_shield, shield.enhanced, hm_y_physics_data);
 
     holtzmann.yAccl = hm_y_physics_data[0];
     holtzmann.yVel = hm_y_physics_data[1];
@@ -914,7 +957,7 @@ void update_hm_x_physics(int xForce, int xAccl, int xVel, int xPos, int touching
 
 }
 
-void update_hm_y_physics(int yForce, int yAccl, int yVel, int yPos, int shieldY, int touchingShield, int * hm_data) {
+void update_hm_y_physics(int yForce, int yAccl, int yVel, int yPos, int shieldY, int touchingShield, int shieldEnhanced, int * hm_data) {
 
   // not touching platform, just keeps falling
   hm_data[0] = yForce/HM_MASS; // yAccl
@@ -923,17 +966,48 @@ void update_hm_y_physics(int yForce, int yAccl, int yVel, int yPos, int shieldY,
 
   // Y physics depends on touching platform or not && on the boost applied from enhanced shield
   if(touchingShield && yVel >= HM_MIN_SPEED) {
-    hm_data[1] = -yVel + 3; // yVel
-    hm_data[2] = shieldY - SHIELD_HEIGHT/2 - HM_DIAM/2; // yPos
-    hm_data[0] = 0; // yAccl
+    // HM WILL BOUNCE OFF THE SHIELD
+    if(shieldEnhanced) {
+    // -> reverse and increase magnitude of y velocity IF enhanced shield by SHIELD_ENERGY_INCREASE %
+      // need to know KE before impact, then calculate new KE w/ % increase, then calculate new v in opposite direction
+//      int double_energy_pre_impact = HM_MASS*(yVel*yVel);
+//      int double_energy_post_impact = double_energy_pre_impact - (int)((SHIELD_ENERGY_INCREASE/100)*double_energy_pre_impact);
+      hm_data[1] = -yVel - SHIELD_ENERGY_INCREASE; // yVel
+      hm_data[2] = shieldY - SHIELD_HEIGHT/2 - HM_DIAM/2; // yPos
+      hm_data[0] = 0; // yAccl
+    }
+    else {
     // -> reverse its y velocity IF not enhanced shield by SHIELD_ENERGY_REDUCTION % KE = 0.5*m*v^2 -> v = sqrt(2*KE/m)
+      // need to know KE before impact, then calculate new KE w/ % increase, then calculate new v in opposite direction
+//        int double_energy_pre_impact = HM_MASS*(yVel*yVel);
+//        int double_energy_post_impact = double_energy_pre_impact - (int)((SHIELD_ENERGY_REDUCTION/100)*double_energy_pre_impact);
+        hm_data[1] = -yVel + SHIELD_ENERGY_REDUCTION; // yVel
+        hm_data[2] = shieldY - SHIELD_HEIGHT/2 - HM_DIAM/2; // yPos
+        hm_data[0] = 0; // yAccl
+    }
   }
   else if(touchingShield && yVel < HM_MIN_SPEED) {
       hm_data[2] = shieldY + SHIELD_HEIGHT/2 + HM_DIAM/2; // yPos
   }
 
-  // -> reverse and increase magnitude of y velocity IF enhanced shield by SHIELD_ENERGY_INCREASE %
-  // -> shield is enhanced IF currentTime - shield.timeEnhanced <= SHIELD_ARMING_WINDOW
+//  // not touching platform, just keeps falling
+//  hm_data[0] = yForce/HM_MASS; // yAccl
+//  hm_data[1] = yVel + yAccl; // yVel
+//  hm_data[2] = yPos + yVel; // yPos
+//
+//  // Y physics depends on touching platform or not && on the boost applied from enhanced shield
+//  if(touchingShield && yVel >= HM_MIN_SPEED) {
+//    hm_data[1] = -yVel + 3; // yVel
+//    hm_data[2] = shieldY - SHIELD_HEIGHT/2 - HM_DIAM/2; // yPos
+//    hm_data[0] = 0; // yAccl
+//    // -> reverse its y velocity IF not enhanced shield by SHIELD_ENERGY_REDUCTION % KE = 0.5*m*v^2 -> v = sqrt(2*KE/m)
+//  }
+//  else if(touchingShield && yVel < HM_MIN_SPEED) {
+//      hm_data[2] = shieldY + SHIELD_HEIGHT/2 + HM_DIAM/2; // yPos
+//  }
+//
+//  // -> reverse and increase magnitude of y velocity IF enhanced shield by SHIELD_ENERGY_INCREASE %
+//  // -> shield is enhanced IF currentTime - shield.timeEnhanced <= SHIELD_ARMING_WINDOW
 
 }
 
@@ -1001,6 +1075,7 @@ static void lcd_output_task(void *arg)
 
         int shield_xPos = SHIELD_INITIAL_X;
         int shield_yPos = SHIELD_INITIAL_Y;
+        int shield_enhanced = 0;
 
         int holtzmann_xPos = HM_INITIAL_X_POSITION;
         int holtzmann_yPos = HM_INITIAL_Y_POSITION;
@@ -1015,6 +1090,7 @@ static void lcd_output_task(void *arg)
 
         // get shield data
         shield_xPos = shield.xPos;
+        shield_enhanced = shield.enhanced;
 
         // post on shield data mutex
         OSMutexPost (&shield_mutex,
@@ -1052,6 +1128,25 @@ static void lcd_output_task(void *arg)
                          5,
                          true
         );
+
+        if(shield_enhanced) {
+            GLIB_drawString (&glibContext,
+                             "EN",
+                             strlen("EN"),
+                             5,
+                             15,
+                             true
+            );
+        }
+        else {
+            GLIB_drawString (&glibContext,
+                             "DIS",
+                             strlen("DIS"),
+                             5,
+                             15,
+                             true
+            );
+        }
 
         DMD_updateDisplay();
     }
@@ -1165,4 +1260,14 @@ void draw_canyon(GLIB_Context_t * glibContext) {
  ******************************************************************************/
 void draw_town(GLIB_Context_t * glibContext) {
   GLIB_drawBitmap(glibContext, 0, 0, TOWN_WIDTH, TOWN_HEIGHT, town_bits);
+}
+
+/***************************************************************************//**
+ * @brief
+ *   Sample pushbutton 0 only if pushbutton 1 is not currently pressed.
+ ******************************************************************************/
+void read_buttons() {
+  // 0 if pressed, 1 not pressed GPIO_PinInGet
+  uint32_t btn0_state = GPIO_PinInGet(BUTTON0_port, BUTTON0_pin);
+  uint32_t btn1_state = GPIO_PinInGet(BUTTON1_port, BUTTON1_pin);
 }

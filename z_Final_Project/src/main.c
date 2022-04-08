@@ -58,7 +58,7 @@ int main(void)
   GPIO_IntClear(GPIO_IF_EXT_DEFAULT);
   //                port          pin          intNum       rise  fall  enable
   GPIO_ExtIntConfig(5, 6u, 6u, false, true, true);
-  GPIO_ExtIntConfig(5, 7u, 7u, false, true, true);
+  GPIO_ExtIntConfig(5, 7u, 7u, true, true, true);
 
   app_init();
 
