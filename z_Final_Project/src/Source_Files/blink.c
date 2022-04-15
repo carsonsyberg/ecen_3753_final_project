@@ -123,6 +123,8 @@ static OS_FLAG_GRP led1_flag_group;
 enum direction_vals {STRAIGHT = 0, HARD_LEFT = 1, SOFT_LEFT = 2, SOFT_RIGHT = 3, HARD_RIGHT = 4};
 enum touching_wall {LEFT_WALL = 0, RIGHT_WALL = 1, NO_WALL = -1};
 enum event_flags {BUTTON_DOWN = 1, BUTTON_UP = 2}; // need to be 1 and 2 since they are bits 0001, 0010
+enum led0_flags {GAME_OVER = 1, FORCE_REQUIRED = 2};
+enum led1_flags {GAME_OVER = 1, FORCE_UPDATE = 2};
 
 // LCD Task Stuff
 static GLIB_Context_t glibContext;
@@ -620,6 +622,14 @@ static void shield_force_task(void *arg) {
                    OS_OPT_POST_NONE,
                    &err);
       EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+      // Post LED1 flag
+      OSFlagPost (&led1_flag_group,
+                  FORCE_UPDATE,
+                  OS_OPT_POST_FLAG_SET,
+                  &err);
+
+      EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
   }
 
 }
@@ -729,8 +739,22 @@ static void physics_update_task(void *arg) {
         game.laser_active = 0;
     }
 
+
     if(holtzmann.yPos < SHIELD_INITIAL_Y - 0.5*SHIELD_HEIGHT) {
         game.game_over = 1;
+
+        // Post LED0 flag
+        OSFlagPost (&led0_flag_group,
+                    GAME_OVER,
+                    OS_OPT_POST_FLAG_SET,
+                    &err);
+    }
+    else {
+        // Post LED0 flag
+        OSFlagPost (&led0_flag_group,
+                    FORCE_REQUIRED,
+                    OS_OPT_POST_FLAG_SET,
+                    &err);
     }
 
     // post on holtzmann data mutex
@@ -744,6 +768,7 @@ static void physics_update_task(void *arg) {
                  OS_OPT_POST_NONE,
                  &err);
     EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
 
 
   }
@@ -1045,6 +1070,15 @@ void update_shield_physics(int force, int xVel, int xAccl, int xPos, int touchin
  * LED0 Update Task.
  ******************************************************************************/
 static void led0_update_task(void *arg) {
+  // Normally this is used to provide simple guidance to your platform operator.
+  // Assuming that the HM’s current trajectory and the platform’s trajectory would
+  // not hit a canyon wall, pulse width modulate this LED to show the % of MAX_FORCE
+  // that would need to be applied to the platform to get it to intersect the HM center-on.
+
+  //
+
+  // If an HM has gotten through the shield or onto the ground thereby leaving the base open
+  // to the Harkonnen, blink on/off with a 50% duty cycle at 1Hz to alert all nearby personnel to evacuate.
 
 }
 
@@ -1052,7 +1086,7 @@ static void led0_update_task(void *arg) {
  * LED1 Update Task.
  ******************************************************************************/
 static void led1_update_task(void *arg) {
-
+  // Pulse width modulated to show (via human-perceived brightness) the current force magnitude, as a % of MAX_FORCE.
 }
 
 /***************************************************************************//**

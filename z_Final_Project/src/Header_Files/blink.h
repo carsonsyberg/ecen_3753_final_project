@@ -137,7 +137,7 @@ struct direction_data {
 #define SHIELD_AUTO_CONTROL 0 //T/F
 #define SHIELD_ENERGY_REDUCTION 3 //exclusively passive bounce kinetic energy reduction %
 #define SHIELD_ENERGY_INCREASE 2 //kinetic energy increase %
-#define SHIELD_ARMING_WINDOW 1000 //ms
+#define SHIELD_ARMING_WINDOW 500 //ms
 #define SHIELD_RECHARGE_TIME 1000 //ms
 // Laser Rules
 #define NUM_LASERS 10
