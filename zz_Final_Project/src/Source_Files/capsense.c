@@ -272,7 +272,7 @@ static void CAPSENSE_Measure(ACMP_Channel_TypeDef channel)
   /* Wait for measurement to complete */
   //while ( measurementComplete == false ) {
   //}
-    OSTimeDly(1, OS_OPT_TIME_DLY, &err);
+    OSTimeDly(10, OS_OPT_TIME_DLY, &err);
     TIMER1->CMD = TIMER_CMD_STOP;
     count = TIMER1->CNT;
 

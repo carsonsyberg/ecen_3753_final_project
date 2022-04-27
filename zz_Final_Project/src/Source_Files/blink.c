@@ -23,27 +23,13 @@
 #include "glib.h"
 #include "dmd.h"
 #include <math.h>
+#include <string.h>
 #include "sl_board_control.h"
 #include "sl_board_control_config.h"
 
 /*******************************************************************************
  ***************************  LOCAL VARIABLES   ********************************
  ******************************************************************************/
-static OS_TCB idle_tcb;
-static CPU_STK idle_stack[IDLE_TASK_STACK_SIZE];
-
-// Speed Setpoint Task
-static OS_TCB speed_tcb;
-static CPU_STK speed_stack[SPEED_TASK_STACK_SIZE];
-// Vehicle Direction Task
-static OS_TCB dir_tcb;
-static CPU_STK dir_stack[DIR_TASK_STACK_SIZE];
-// Vehicle Monitor Task
-static OS_TCB monitor_tcb;
-static CPU_STK monitor_stack[MONITOR_TASK_STACK_SIZE];
-// LED Output Task
-static OS_TCB led_tcb;
-static CPU_STK led_stack[LED_TASK_STACK_SIZE];
 
 // -------------- Make an enum for event flags --------- //
 enum messages {LED0_ONLY = 1, LED1_ONLY = 2, LED_ALL = 3, LED_NONE = 4};
@@ -120,6 +106,16 @@ static OS_FLAG_GRP led0_flag_group;
 // LED1 Flag Group
 static OS_FLAG_GRP led1_flag_group;
 
+static OS_TMR led1_period_timer;
+static OS_TMR led1_oneshot_timer;
+
+static OS_TMR led0_period_timer;
+static OS_TMR led0_oneshot_timer;
+
+static OS_TMR led3_period_timer;
+static OS_TMR led3_oneshot_timer;
+
+
 enum direction_vals {STRAIGHT = 0, HARD_LEFT = 1, SOFT_LEFT = 2, SOFT_RIGHT = 3, HARD_RIGHT = 4};
 enum touching_wall {LEFT_WALL = 0, RIGHT_WALL = 1, NO_WALL = -1};
 enum event_flags {BUTTON_DOWN = 1, BUTTON_UP = 2, BOTH_PRESSED_BTN1 = 4}; // need to be 1 and 2 since they are bits 0001, 0010
@@ -155,9 +151,15 @@ static void shield_force_task(void *arg);
 static void physics_update_task(void *arg);
 static void led0_update_task(void *arg);
 static void led1_update_task(void *arg);
-static void idle_task(void *arg);
 static void lcd_output_task(void *arg);
 void laser_valid(int num_lasers, int * data);
+void led1_periodic_callback(void * p_tmr, void * p_arg);
+void led1_oneshot_callback(void * p_tmr, void * p_arg);
+void led0_periodic_callback(void * p_tmr, void * p_arg);
+void led0_oneshot_callback(void * p_tmr, void * p_arg);
+void led3_periodic_callback(void * p_tmr, void * p_arg);
+void led3_oneshot_callback(void * p_tmr, void * p_arg);
+int valid_config_data(void);
 
 int read_capsense();
 void draw_holtzmann(int xPos, int yPos, GLIB_Context_t * glibContext);
@@ -289,6 +291,9 @@ void blink_init(void)
   /* Use Narrow font */
   GLIB_setFont(&glibContext, (GLIB_Font_t *) &GLIB_FontNarrow6x8);
 
+  // Test Config Data Values
+//  EFM_ASSERT(valid_config_data() == 1);
+
   // ------------------ CREATE FINAL PROJECT DATA STRUCTURES ---------------- //
   // BTN0 Flag Group
   OSFlagCreate(&btn0_flag_group,
@@ -329,6 +334,68 @@ void blink_init(void)
                0,
                &err);
   EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+  // TIMERS FOR LED PWM CONTROL
+  OSTmrCreate(&led1_period_timer,
+              "Led1 Periodic Timer",
+              0,
+              LED1_INITIAL_PERIOD,
+              OS_OPT_TMR_PERIODIC,
+              &led1_periodic_callback,
+              DEF_NULL,
+              &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+  OSTmrCreate(&led1_oneshot_timer,
+              "Led1 Oneshot Timer",
+              LED1_INITIAL_ONESHOT,
+              0,
+              OS_OPT_TMR_ONE_SHOT,
+              &led1_oneshot_callback,
+              DEF_NULL,
+              &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+  OSTmrCreate(&led0_period_timer,
+              "Led0 Periodic Timer",
+              0,
+              LED0_INITIAL_PERIOD,
+              OS_OPT_TMR_PERIODIC,
+              &led0_periodic_callback,
+              DEF_NULL,
+              &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+  OSTmrCreate(&led0_oneshot_timer,
+              "Led0 Oneshot Timer",
+              LED0_INITIAL_ONESHOT,
+              0,
+              OS_OPT_TMR_ONE_SHOT,
+              &led0_oneshot_callback,
+              DEF_NULL,
+              &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+  OSTmrCreate(&led3_period_timer,
+              "Led3 Periodic Timer",
+              0,
+              LED3_INITIAL_PERIOD,
+              OS_OPT_TMR_PERIODIC,
+              &led3_periodic_callback,
+              DEF_NULL,
+              &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+  OSTmrCreate(&led3_oneshot_timer,
+              "Led3 Oneshot Timer",
+              LED3_INITIAL_ONESHOT,
+              0,
+              OS_OPT_TMR_ONE_SHOT,
+              &led3_oneshot_callback,
+              DEF_NULL,
+              &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
 
   // ------------------ CREATE FINAL PROJECT TASKS -------------------------- //
   // Laser Update Task
@@ -392,35 +459,35 @@ void blink_init(void)
                &err);
   EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
   // LED0 Update Task
-//  OSTaskCreate(&led0_tcb,
-//               "led0 update task",
-//               led0_update_task,
-//               DEF_NULL,
-//               LED0_TASK_PRIO,
-//               &led0_stack[0],
-//               (LED0_TASK_STACK_SIZE / 10u),
-//               LED0_TASK_STACK_SIZE,
-//               0u,
-//               0u,
-//               DEF_NULL,
-//               (OS_OPT_TASK_STK_CLR),
-//               &err);
-//  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
-//  // LED1 Update Task
-//  OSTaskCreate(&led1_tcb,
-//               "led1 update task",
-//               led1_update_task,
-//               DEF_NULL,
-//               LED1_TASK_PRIO,
-//               &led1_stack[0],
-//               (LED1_TASK_STACK_SIZE / 10u),
-//               LED1_TASK_STACK_SIZE,
-//               0u,
-//               0u,
-//               DEF_NULL,
-//               (OS_OPT_TASK_STK_CLR),
-//               &err);
-//  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+  OSTaskCreate(&led0_tcb,
+               "led0 update task",
+               led0_update_task,
+               DEF_NULL,
+               LED0_TASK_PRIO,
+               &led0_stack[0],
+               (LED0_TASK_STACK_SIZE / 10u),
+               LED0_TASK_STACK_SIZE,
+               0u,
+               0u,
+               DEF_NULL,
+               (OS_OPT_TASK_STK_CLR),
+               &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+  // LED1 Update Task
+  OSTaskCreate(&led1_tcb,
+               "led1 update task",
+               led1_update_task,
+               DEF_NULL,
+               LED1_TASK_PRIO,
+               &led1_stack[0],
+               (LED1_TASK_STACK_SIZE / 10u),
+               LED1_TASK_STACK_SIZE,
+               0u,
+               0u,
+               DEF_NULL,
+               (OS_OPT_TASK_STK_CLR),
+               &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
   // LCD Display Task
   OSTaskCreate(&lcd_tcb,
@@ -437,46 +504,6 @@ void blink_init(void)
                  (OS_OPT_TASK_STK_CLR),
                  &err);
   EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
-
-  // Create Idle Task
-  OSTaskCreate(&idle_tcb,
-               "idle task",
-               idle_task,
-               DEF_NULL,
-               IDLE_TASK_PRIO,
-               &idle_stack[0],
-               (IDLE_TASK_STACK_SIZE / 10u),
-               IDLE_TASK_STACK_SIZE,
-               0u,
-               0u,
-               DEF_NULL,
-               (OS_OPT_TASK_STK_CLR),
-               &err);
-  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
-}
-
-/***************************************************************************//**
- * Idle task.
- ******************************************************************************/
-static void idle_task(void *arg)
-{
-    // initialize hardware "owned" by this task... none?
-
-    PP_UNUSED_PARAM(arg);
-
-    // infinite while loop
-    RTOS_ERR err;
-    while (1)
-    {
-        // call the function that performs the processing specific to this task
-        EMU_EnterEM1();
-        // call OSTimeDly to delay between each loop iteration
-        OSTimeDly(10, OS_OPT_TIME_DLY, &err);
-        EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
-
-    }
-
-
 }
 
 /***************************************************************************//**
@@ -625,7 +652,7 @@ static void shield_force_task(void *arg) {
   while (1)
   {
       // call OSTimeDly to delay between each loop iteration
-      OSTimeDly(20, OS_OPT_TIME_DLY, &err);
+      OSTimeDly(10, OS_OPT_TIME_DLY, &err);
       EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
       // add call to read capacitive touch slider
@@ -686,8 +713,24 @@ static void physics_update_task(void *arg) {
     // call OSTimeDly to delay between each loop iteration
     OSTimeDly(TAU_PHYSICS, OS_OPT_TIME_DLY, &err);
 
+    // pend on game data mutex
+    OSMutexPend(&game_mutex,
+                0,
+                OS_OPT_PEND_BLOCKING,
+                0,
+                &err);
+    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
     // pend on shield data mutex
     OSMutexPend(&shield_mutex,
+                0,
+                OS_OPT_PEND_BLOCKING,
+                0,
+                &err);
+    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+    // pend on holtzmann data mutex
+    OSMutexPend(&holtzmann_mutex,
                 0,
                 OS_OPT_PEND_BLOCKING,
                 0,
@@ -713,14 +756,6 @@ static void physics_update_task(void *arg) {
         shield.xVel = -shield.xVel;
         shield.xPos = shield.xPos + shield.xVel*TAU_PHYSICS*MS_TO_S; // cm + (cm/s)*(ms)*(1 s / 1000 ms) -> cm
     }
-
-    // pend on holtzmann data mutex
-    OSMutexPend(&holtzmann_mutex,
-                0,
-                OS_OPT_PEND_BLOCKING,
-                0,
-                &err);
-    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
     // Check if HM touching wall
     int HM_touching_wall = NO_WALL;
@@ -818,20 +853,6 @@ static void physics_update_task(void *arg) {
         holtzmann.xPos = holtzmann.xPos + holtzmann.xVel*TAU_PHYSICS*MS_TO_S; // cm + (cm/s)*(ms)*(1 s / 1000 ms) -> cm
     }
 
-    // post on shield data mutex
-    OSMutexPost (&shield_mutex,
-                 OS_OPT_POST_NONE,
-                 &err);
-    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
-
-    // pend on game data mutex
-    OSMutexPend(&game_mutex,
-                0,
-                OS_OPT_PEND_BLOCKING,
-                0,
-                &err);
-    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
-
     // if HM mass goes off top of screen, reset it and decrement num_HM_left
     if(holtzmann.yPos - 0.5*HM_DIAM >= 100000) {
         holtzmann.yPos = 100000; // reset HM position
@@ -865,6 +886,12 @@ static void physics_update_task(void *arg) {
                  &err);
     EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
+    // post on shield data mutex
+    OSMutexPost (&shield_mutex,
+                 OS_OPT_POST_NONE,
+                 &err);
+    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
     // post on game data mutex
     OSMutexPost (&game_mutex,
                  OS_OPT_POST_NONE,
@@ -878,30 +905,227 @@ static void physics_update_task(void *arg) {
  * LED0 Update Task.
  ******************************************************************************/
 static void led0_update_task(void *arg) {
-  // Normally this is used to provide simple guidance to your platform operator.
-  // Assuming that the HM’s current trajectory and the platform’s trajectory would
-  // not hit a canyon wall, pulse width modulate this LED to show the % of MAX_FORCE
-  // that would need to be applied to the platform to get it to intersect the HM center-on.
+  RTOS_ERR err;
 
-  //
+  PP_UNUSED_PARAM(arg);
 
-  // If an HM has gotten through the shield or onto the ground thereby leaving the base open
-  // to the Harkonnen, blink on/off with a 50% duty cycle at 1Hz to alert all nearby personnel to evacuate.
+  // start led0 periodic timer
+  OSTmrStart(&led0_period_timer,
+             &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
-//  GPIO_PinOutSet(LED0_port, LED0_pin);
-//  GPIO_PinOutClear(LED0_port, LED0_pin);
+
+  // infinite while loop
+  while (1)
+  {
+    // call OSTimeDly to delay between each loop iteration
+    OSTimeDly(10, OS_OPT_TIME_DLY, &err);
+    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+    // Normally this is used to provide simple guidance to your platform operator.
+    // Assuming that the HM’s current trajectory and the platform’s trajectory would
+    // not hit a canyon wall, pulse width modulate this LED to show the % of MAX_FORCE
+    // that would need to be applied to the platform to get it to intersect the HM center-on.
+
+    // If an HM has gotten through the shield or onto the ground thereby leaving the base open
+
+    // Need to get game data mutex first, if game over -> 50% duty cycle, blink at 1 Hz
+    int game_over = 0;
+    // pend on game data mutex
+    OSMutexPend(&game_mutex,
+                0,
+                OS_OPT_PEND_BLOCKING,
+                0,
+                &err);
+    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+    game_over = game.game_over;
+
+    // post on game data mutex
+    OSMutexPost (&game_mutex,
+                 OS_OPT_POST_NONE,
+                 &err);
+    EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+    // if game not over -> get holtzmann and shield data mutexes and calculate stuff
+    int duty_cycle_percent = 0;
+    if(game_over != -1) {
+        // pend on shield data mutex
+        OSMutexPend(&shield_mutex,
+                    0,
+                    OS_OPT_PEND_BLOCKING,
+                    0,
+                    &err);
+        EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+        // pend on holtzmann data mutex
+        OSMutexPend(&holtzmann_mutex,
+                    0,
+                    OS_OPT_PEND_BLOCKING,
+                    0,
+                    &err);
+        EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+      // calculate % of Max Force needed to line up HM with shield
+        // if difference in their x values (keep in mind origin in center) is certain amount -> max force
+        if(abs(holtzmann.xPos - shield.xPos) > 50000) {
+            duty_cycle_percent = 100;
+        }
+        // if difference in x values is smaller than that -> less force (half?)
+        if(abs(holtzmann.xPos - shield.xPos) <= 50000 && abs(holtzmann.xPos - shield.xPos) > SHIELD_LENGTH/2) {
+            duty_cycle_percent = 50;
+        }
+        // if difference in x values is 0
+        if(abs(holtzmann.xPos - shield.xPos) <= SHIELD_LENGTH/2) {
+            duty_cycle_percent = 0;
+        }
+
+        // post on holtzmann data mutex
+        OSMutexPost (&holtzmann_mutex,
+                     OS_OPT_POST_NONE,
+                     &err);
+        EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+        // post on shield data mutex
+        OSMutexPost (&shield_mutex,
+                     OS_OPT_POST_NONE,
+                     &err);
+        EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+        // set period of led0_oneshot_timer to make display at according duty cycle %
+        int one_shot_delay = LED0_INITIAL_ONESHOT;
+        if(duty_cycle_percent == 100) {
+            one_shot_delay = LED0_INITIAL_PERIOD;
+        }
+        else if(duty_cycle_percent == 50) {
+            one_shot_delay = LED0_INITIAL_ONESHOT; // 10 ms
+        }
+
+        OSTmrSet(&led0_oneshot_timer,
+                 one_shot_delay,
+                 0,
+                 &led0_oneshot_callback,
+                 &duty_cycle_percent,
+                 &err);
+        EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+        OSTmrSet(&led0_period_timer,
+                 0,
+                 LED0_INITIAL_PERIOD,
+                 &led0_periodic_callback,
+                 &duty_cycle_percent,
+                 &err);
+        EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+    }
+    else {
+        // blink on/off with a 50% duty cycle at 1Hz to alert all nearby personnel to evacuate.
+
+        // turn off other led0 timer
+        OSTmrStop(&led0_period_timer,
+                  OS_OPT_TMR_NONE,
+                  DEF_NULL,
+                  &err);
+        EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+        duty_cycle_percent = 50;
+        // set oneshot timer to 50% duty cycle
+        OSTmrSet(&led0_oneshot_timer,
+                 LED0_INITIAL_ONESHOT,
+                 0,
+                 &led0_oneshot_callback,
+                 &duty_cycle_percent,
+                 &err);
+        EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+        OSTmrSet(&led0_period_timer,
+                 0,
+                 LED0_INITIAL_PERIOD,
+                 &led0_periodic_callback,
+                 &duty_cycle_percent,
+                 &err);
+        EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+        // may need another timer at 1 Hz frequency, so during the on second other 2 timers run, during off other timers stop and led off
+        // start 1 Hz timer that turns led on / off
+        OSTmrStart(&led3_period_timer,
+                   &err);
+        EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+        // then break out of loop, this task is finished
+        break;
+    }
+  }
 }
 
 /***************************************************************************//**
  * LED1 Update Task.
  ******************************************************************************/
 static void led1_update_task(void *arg) {
-  // Pulse width modulated to show (via human-perceived brightness) the current force magnitude, as a % of MAX_FORCE.
-  // need to calculate duty_cycle_percentage = current_force_mag / MAX_FORCE;
+  RTOS_ERR err;
 
+  PP_UNUSED_PARAM(arg);
 
-  GPIO_PinOutSet(LED1_port, LED1_pin);
-//  GPIO_PinOutClear(LED1_port, LED1_pin);
+  // start led1 periodic timer
+  OSTmrStart(&led1_period_timer,
+             &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+  // infinite while loop
+  while (1)
+  {
+      // call OSTimeDly to delay between each loop iteration
+      OSTimeDly(10, OS_OPT_TIME_DLY, &err);
+      EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+      // Pulse width modulated to show (via human-perceived brightness) the current force magnitude, as a % of MAX_FORCE.
+      // need to calculate duty_cycle_percentage = current_force_mag / MAX_FORCE;
+      // need mutex on shield data
+      int current_force_mag = 0;
+      OSMutexPend(&shield_mutex,
+                  0,
+                  OS_OPT_PEND_BLOCKING,
+                  0,
+                  &err);
+      EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+      current_force_mag = abs(shield.forceApplied);
+
+      // post on shield data mutex
+      OSMutexPost (&shield_mutex,
+                   OS_OPT_POST_NONE,
+                   &err);
+      EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+      int one_shot_delay = LED1_INITIAL_ONESHOT;
+      int led1_callback_arg = 0;
+      int led1_periodic_arg = 0;
+      if(current_force_mag == SHIELD_MAX_FORCE) {
+          one_shot_delay = LED1_INITIAL_PERIOD; // ms -> 100% duty cycle
+          led1_periodic_arg = 1;
+      }
+      else if(current_force_mag == SHIELD_MAX_FORCE/2) {
+          one_shot_delay = LED1_INITIAL_ONESHOT; // ms -> 50% duty cycle
+      }
+      else {
+          led1_callback_arg = 1; // 0% duty cycle
+          // turn off light and stop periodic
+      }
+
+      OSTmrSet(&led1_oneshot_timer,
+               one_shot_delay,
+               0,
+               &led1_oneshot_callback,
+               &led1_callback_arg,
+               &err);
+      EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+      OSTmrSet(&led1_period_timer,
+               0,
+               LED1_INITIAL_PERIOD,
+               &led1_periodic_callback,
+               &led1_periodic_arg,
+               &err);
+      EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+  }
 }
 
 /***************************************************************************//**
@@ -924,7 +1148,6 @@ static void lcd_output_task(void *arg)
 
         int shield_xPos = SHIELD_INITIAL_X;
         int shield_yPos = SHIELD_INITIAL_Y;
-        int shield_enhanced = 0;
 
         int holtzmann_xPos = HM_INITIAL_X_POSITION;
         int holtzmann_yPos = HM_INITIAL_Y_POSITION;
@@ -933,23 +1156,20 @@ static void lcd_output_task(void *arg)
         int num_hm = 0;
         int num_laser = 0;
 
+        // pend on game data mutex
+        OSMutexPend (&game_mutex,
+                     0,
+                     OS_OPT_PEND_BLOCKING,
+                     0,
+                     &err);
+        EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
         // pend on shield data mutex
         OSMutexPend(&shield_mutex,
                     0,
                     OS_OPT_PEND_BLOCKING,
                     0,
                     &err);
-        EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
-
-        // get shield data
-        shield_xPos = shield.xPos;
-        shield_yPos = shield.yPos;
-        shield_enhanced = shield.enhanced;
-
-        // post on shield data mutex
-        OSMutexPost (&shield_mutex,
-                     OS_OPT_POST_NONE,
-                     &err);
         EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
         // pend on holtzmann data mutex
@@ -960,6 +1180,14 @@ static void lcd_output_task(void *arg)
                     &err);
         EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
+        game_over = game.game_over;
+        num_hm = game.num_HM_left;
+        num_laser = game.num_laser_left;
+
+        // get shield data
+        shield_xPos = shield.xPos;
+        shield_yPos = shield.yPos;
+
         holtzmann_xPos = holtzmann.xPos;
         holtzmann_yPos = holtzmann.yPos;
 
@@ -969,18 +1197,11 @@ static void lcd_output_task(void *arg)
                      &err);
         EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
 
-
-        // pend on game data mutex
-        OSMutexPend (&game_mutex,
-                     0,
-                     OS_OPT_PEND_BLOCKING,
-                     0,
+        // post on shield data mutex
+        OSMutexPost (&shield_mutex,
+                     OS_OPT_POST_NONE,
                      &err);
         EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
-
-        game_over = game.game_over;
-        num_hm = game.num_HM_left;
-        num_laser = game.num_laser_left;
 
         // post on game data mutex
         OSMutexPost (&game_mutex,
@@ -1001,27 +1222,18 @@ static void lcd_output_task(void *arg)
           draw_shield(shield_xPos, shield_yPos, &glibContext);
           draw_canyon(&glibContext);
 
-          // DEBUG PRINT ---------------------------------------------------------------
-          GLIB_drawString (&glibContext,
-                           &print_string,
-                           strlen(print_string),
-                           5,
-                           5,
-                           true
-          );
-
           GLIB_drawString (&glibContext,
                            num_hm_string,
                            strlen(num_hm_string),
                            5,
-                           15,
+                           5,
                            true
           );
           GLIB_drawString (&glibContext,
                            num_laser_string,
                            strlen(num_laser_string),
                            5,
-                           25,
+                           15,
                            true
           );
         }
@@ -1029,8 +1241,8 @@ static void lcd_output_task(void *arg)
             GLIB_drawString (&glibContext,
                              "YOU LOSE",
                              strlen("YOU LOSE"),
-                             5,
-                             15,
+                             40,
+                             60,
                              true
             );
         }
@@ -1038,8 +1250,8 @@ static void lcd_output_task(void *arg)
             GLIB_drawString (&glibContext,
                              "YOU WIN",
                              strlen("YOU WIN"),
-                             5,
-                             15,
+                             45,
+                             60,
                              true
             );
         }
@@ -1168,12 +1380,187 @@ void draw_town(GLIB_Context_t * glibContext) {
   GLIB_drawBitmap(glibContext, 0, 0, TOWN_WIDTH, TOWN_HEIGHT, town_bits);
 }
 
-/***************************************************************************//**
- * @brief
- *   Sample pushbutton 0 only if pushbutton 1 is not currently pressed.
- ******************************************************************************/
-void read_buttons() {
-  // 0 if pressed, 1 not pressed GPIO_PinInGet
-  uint32_t btn0_state = GPIO_PinInGet(BUTTON0_port, BUTTON0_pin);
-  uint32_t btn1_state = GPIO_PinInGet(BUTTON1_port, BUTTON1_pin);
+void led1_periodic_callback(void * p_tmr, void *p_arg) {
+
+  PP_UNUSED_PARAM(p_tmr);
+
+  RTOS_ERR err;
+
+  int * max_force_applied = p_arg;
+
+  // turn on led1
+  if(*max_force_applied)
+    GPIO_PinOutSet(LED1_port, LED1_pin);
+  else
+    GPIO_PinOutClear(LED1_port, LED1_pin);
+
+//   start led1_oneshot_timer
+  OSTmrStart(&led1_oneshot_timer,
+             &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+}
+
+void led1_oneshot_callback(void * p_tmr, void *p_arg) {
+
+  PP_UNUSED_PARAM(p_tmr);
+
+  int * no_force_applied = p_arg;
+
+  // turn off led1
+  if(*no_force_applied)
+      GPIO_PinOutClear(LED1_port, LED1_pin);
+  else
+      GPIO_PinOutSet(LED1_port, LED1_pin);
+
+}
+
+void led0_periodic_callback(void * p_tmr, void *p_arg) {
+
+  PP_UNUSED_PARAM(p_tmr);
+
+  RTOS_ERR err;
+
+  int * duty_cycle_percent = p_arg;
+
+  // turn off led0
+  if(*duty_cycle_percent == 100)
+    GPIO_PinOutSet(LED0_port, LED0_pin);
+  else
+    GPIO_PinOutClear(LED0_port, LED0_pin);
+
+  // start led0_oneshot_timer
+  OSTmrStart(&led0_oneshot_timer,
+             &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+}
+
+void led0_oneshot_callback(void * p_tmr, void *p_arg) {
+
+  PP_UNUSED_PARAM(p_tmr);
+
+  int * duty_cycle_percent = p_arg;
+
+  // turn on led0
+  if(*duty_cycle_percent == 0)
+    GPIO_PinOutClear(LED0_port, LED0_pin);
+  else
+    GPIO_PinOutSet(LED0_port, LED0_pin);
+}
+
+void led3_periodic_callback(void * p_tmr, void *p_arg) {
+  PP_UNUSED_PARAM(p_arg);
+  PP_UNUSED_PARAM(p_tmr);
+  RTOS_ERR err;
+
+  // start led0 periodic timer
+  GPIO_PinOutSet(LED0_port, LED0_pin);
+//  OSTmrStart(&led0_period_timer,
+//             &err);
+//  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+  OSTmrStart(&led3_oneshot_timer,
+             &err);
+  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+
+  // wait for half of timer period (1 Hz)
+  OSTimeDly(10, OS_OPT_TIME_DLY, &err);
+}
+
+void led3_oneshot_callback(void * p_tmr, void *p_arg) {
+
+  PP_UNUSED_PARAM(p_tmr);
+  PP_UNUSED_PARAM(p_arg);
+
+  // then turn off led0 periodic timer and led0
+  GPIO_PinOutClear(LED0_port, LED0_pin);
+//  OSTmrStop(&led0_period_timer,
+//            OS_OPT_TMR_NONE,
+//            DEF_NULL,
+//            &err);
+//  EFM_ASSERT((RTOS_ERR_CODE_GET(err) == RTOS_ERR_NONE));
+}
+
+int valid_config_data(void) {
+  // Data Structure Version
+  if(DATA_STRUCTURE_VERSION != 4)
+    return 0;
+  // TauPhysics
+  if(TAU_PHYSICS > 100 || TAU_PHYSICS < 8)
+    return 0;
+  // TauLCD
+  if(TAU_LCD > 150 || TAU_LCD < 10)
+    return 0;
+  // Gravity
+  if(GRAVITY > -30000 || GRAVITY < -120000)
+    return 0;
+  // CanyonSize
+  if(CANYON_SIZE > 100000 || CANYON_SIZE < 10000)
+    return 0;
+
+  // HM Num
+  if(HM_NUM < 1)
+    return 0;
+  // HM Diam
+  if(HM_DIAM < 1000 || HM_DIAM > 25000)
+    return 0;
+  // HM Init Conditions
+  if(HM_INIT_CONDITIONS != 0)
+    return 0;
+  // HM Init xVel
+  if(HM_INITIAL_X_VELOCITY < -20000 || HM_INITIAL_X_VELOCITY > 20000)
+    return 0;
+  // HM Init yVel
+  if(HM_INITIAL_Y_VELOCITY != 0)
+    return 0;
+  // HM Init xPos
+  if(HM_INITIAL_X_POSITION < -(CANYON_SIZE)/2 + HM_DIAM || HM_INITIAL_X_POSITION > (CANYON_SIZE)/2 - HM_DIAM)
+    return 0;
+  // HM user defined mode
+  if(HM_USER_DEFINED_MODE_INPUT != 0)
+    return 0;
+
+  // Max Shield Force
+  if(SHIELD_MAX_FORCE < 80000 || SHIELD_MAX_FORCE > 500000)
+    return 0;
+  // Shield Mass
+  if(SHIELD_MASS < 10 || SHIELD_MASS > 10000)
+    return 0;
+  // Shield Length
+  if(SHIELD_LENGTH < 5000 || SHIELD_LENGTH > 50000)
+    return 0;
+  // Bounce Enabled
+  if(SHIELD_BOUNCE_ENABLED != 1)
+    return 0;
+  // Bounce Limited
+  if(SHIELD_BOUNCE_LIMITED != 0)
+    return 0;
+  // Max Platform Bounce Speed
+  if(SHIELD_MAX_BOUNCE_SPEED != 0)
+    return 0;
+  // Shield Auto Control
+  if(SHIELD_AUTO_CONTROL != 0)
+    return 0;
+  // Shiled Min Perpendicular Speed
+  if(SHIELD_MIN_PERPENDICULAR_SPEED != 1000)
+    return 0;
+  // Energy Reduction Percent
+  if(SHIELD_ENERGY_REDUCTION > 90 || SHIELD_ENERGY_REDUCTION < 10)
+    return 0;
+  // Energy Increase Percent
+  if(SHIELD_ENERGY_INCREASE > 70 || SHIELD_ENERGY_INCREASE < 10)
+    return 0;
+  // Arming Window
+  if(SHIELD_ARMING_WINDOW < 500 || SHIELD_ARMING_WINDOW > 1000)
+    return 0;
+  // Recharge Time
+  if(SHIELD_RECHARGE_TIME < 500 || SHIELD_RECHARGE_TIME > 10000)
+    return 0;
+  // Num Lasers
+  if(NUM_LASERS < 0)
+    return 0;
+  // Auto Laser Control
+  if(AUTO_LASERS != 0)
+    return 0;
+
+  return 1;
 }

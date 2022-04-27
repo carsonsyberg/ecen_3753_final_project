@@ -25,79 +25,28 @@
 #include "town.h"
 #include "person2.h"
 
-//#define BLINK_TASK_STACK_SIZE      96
-//#define BLINK_TASK_PRIO            20
-
-#define BUTTON_TASK_STACK_SIZE     256
-#define BUTTON_TASK_PRIO           18
-
-#define SLIDER_TASK_STACK_SIZE     256
-#define SLIDER_TASK_PRIO           18
-
-#define IDLE_TASK_STACK_SIZE        256
-#define IDLE_TASK_PRIO              21
-
-  // Speed Setpoint Task
-#define SPEED_TASK_STACK_SIZE        256
-#define SPEED_TASK_PRIO              19
-  // Vehicle Direction Task
-#define DIR_TASK_STACK_SIZE        256
-#define DIR_TASK_PRIO              19
-  // Vehicle Monitor Task
-#define MONITOR_TASK_STACK_SIZE        256
-#define MONITOR_TASK_PRIO              20
-  // LED Output Task
-#define LED_TASK_STACK_SIZE        256
-#define LED_TASK_PRIO              17
-
-//----------------------------------------------------------------------------------------------------------------------------------
-/// @brief Structure which holds the vehicle speed data.
-//----------------------------------------------------------------------------------------------------------------------------------
-struct speed_data {
-  // current speed
-  // count of speed increments
-  // count of speed decrements
-  int curr_speed;
-  int incr_count;
-  int decr_count;
-};
-
-//----------------------------------------------------------------------------------------------------------------------------------
-/// @brief Structure which holds the vehicle direction data.
-//----------------------------------------------------------------------------------------------------------------------------------
-struct direction_data {
-  // current direction
-  // time without direction changing
-  // count of left turns
-  // count of right turns
-  int curr_dir;
-  int time_since_change;
-  int left_count;
-  int right_count;
-};
-
 // -------------------------------------------------------------------------- //
 // ------------------ FINAL PROJECT STUFF ----------------------------------- //
 // -------------------------------------------------------------------------- //
 
   // LCD Display Task
 #define LCD_TASK_STACK_SIZE        256
-#define LCD_TASK_PRIO              19
+#define LCD_TASK_PRIO              18
   // LaserUpdateTask
 #define LASER_TASK_STACK_SIZE        256
-#define LASER_TASK_PRIO              20
+#define LASER_TASK_PRIO              16
   // ShieldEnhanceTask
-#define SHIELD_ENHANCE_TASK_STACK_SIZE        256
-#define SHIELD_ENHANCE_TASK_PRIO              20
+#define SHIELD_ENHANCE_TASK_STACK_SIZE        512
+#define SHIELD_ENHANCE_TASK_PRIO              15
   // ShieldForceTask
-#define SHIELD_FORCE_TASK_STACK_SIZE        256
-#define SHIELD_FORCE_TASK_PRIO              17
+#define SHIELD_FORCE_TASK_STACK_SIZE        512
+#define SHIELD_FORCE_TASK_PRIO              14
   // PhysicsUpdateTask
-#define PHYSICS_TASK_STACK_SIZE        256
-#define PHYSICS_TASK_PRIO              18
+#define PHYSICS_TASK_STACK_SIZE        512
+#define PHYSICS_TASK_PRIO              17
   // LED0Task
 #define LED0_TASK_STACK_SIZE        256
-#define LED0_TASK_PRIO              20
+#define LED0_TASK_PRIO              19
   // LED1Task
 #define LED1_TASK_STACK_SIZE        256
 #define LED1_TASK_PRIO              20
@@ -106,44 +55,57 @@ struct direction_data {
 #define SHIELD_WIDTH 40000
 #define SHIELD_HEIGHT 2000
 
-// -------------------------- YOU CHOOSE THE BELOW VALUES ------------------- //
-// -------------------------- USE WHATEVER WORKS ---------------------------- //
-
+// -------------------------- Project Config Values ------------------- //
 // Game Rules
-#define DATA_STRUCTURE_VERSION 1
+#define DATA_STRUCTURE_VERSION 4
+#define TAU_PHYSICS 10 // ms
+#define TAU_LCD 60 // ms
 #define GRAVITY -98000 // mm/s^2
 #define CANYON_SIZE 100000 // cm
-#define TAU_PHYSICS 10 // ms
-#define TAU_LCD 10 // ms
 // Holtzmann Rules
 #define HM_NUM 3 // number of holtzmann masses
-#define HM_DIAM 7000 // cm
+#define HM_DIAM 10000 // cm
 #define HM_INIT_CONDITIONS 0 //enum: Fixed=0. 127+ available for user defined modes
-#define HM_INITIAL_X_VELOCITY 20000 // cm/s
+#define HM_INITIAL_X_VELOCITY 4000 // cm/s
 #define HM_INITIAL_Y_VELOCITY 0 // cm/s
 #define HM_INITIAL_X_POSITION 0 // cm
-#define HM_INITIAL_Y_POSITION 100000 // cm
 #define HM_USER_DEFINED_MODE_INPUT 0 //i.e. 8x32b set aside for user-defined mode params
-#define HM_MASS 100 // kg
-#define HM_MIN_SPEED 10000 // cm/s
-#define HM_IMAGE 0 // 0 is just a sphere that can change size, 1 is a little person
 // Shield Rules
-#define SHIELD_INITIAL_X 0
-#define SHIELD_INITIAL_Y 10000
 #define SHIELD_MAX_FORCE 200000 // N
 #define SHIELD_MASS 100 // kg
-#define SHIELD_LENGTH 40000 // cm
+#define SHIELD_LENGTH 15000 // cm
 #define SHIELD_BOUNCE_ENABLED 1 // T/F
 #define SHIELD_BOUNCE_LIMITED 0 // T/F
 #define SHIELD_MAX_BOUNCE_SPEED 0 // cm/s
 #define SHIELD_AUTO_CONTROL 0 // T/F
-#define SHIELD_ENERGY_REDUCTION 50 //exclusively passive bounce kinetic energy reduction %
+#define SHIELD_MIN_PERPENDICULAR_SPEED 0 // cm/s
+#define SHIELD_ENERGY_REDUCTION 70 //exclusively passive bounce kinetic energy reduction %
 #define SHIELD_ENERGY_INCREASE 40 //kinetic energy increase %
 #define SHIELD_ARMING_WINDOW 500 //ms
 #define SHIELD_RECHARGE_TIME 1000 //ms
 // Laser Rules
 #define NUM_LASERS 1
 #define AUTO_LASERS 0 //T/F
+// -------------------------------------------------------------------------------------- //
+
+// Stuff not in the project config values
+// LED Initial Periods
+#define LED1_INITIAL_PERIOD 2 // ms
+#define LED1_INITIAL_ONESHOT 1 // ms
+
+#define LED0_INITIAL_PERIOD 2 // ms
+#define LED0_INITIAL_ONESHOT 1 // ms
+
+#define LED3_INITIAL_PERIOD 80
+#define LED3_INITIAL_ONESHOT 40
+
+#define SHIELD_INITIAL_X 0
+#define SHIELD_INITIAL_Y 10000
+
+#define HM_INITIAL_Y_POSITION 100000 // cm
+#define HM_IMAGE 0 // 0 is just a sphere that can change size, 1 is a little person
+#define HM_MASS 100 // kg
+#define HM_MIN_SPEED 20000 // cm/s
 
 //----------------------------------------------------------------------------------------------------------------------------------
 /// @brief Structure which holds the shield data.

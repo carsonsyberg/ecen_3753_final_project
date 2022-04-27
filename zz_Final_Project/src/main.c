@@ -18,6 +18,8 @@
 //#define BUTTON1_pin  7u
 //#define BUTTON1_default false // Default false (0) = not pressed, true (1) = pressed
 
+OS_TASK_CFG tmr_task_cfg;
+
 int main(void)
 {
   EMU_DCDCInit_TypeDef dcdcInit = EMU_DCDCINIT_DEFAULT;
@@ -45,6 +47,13 @@ int main(void)
   BSP_SystemInit();                                           /* Initialize System.                                   */
 
   RTOS_ERR err;
+
+  tmr_task_cfg.Prio = 5;
+  tmr_task_cfg.StkSize = 256u;
+  tmr_task_cfg.StkBasePtr = DEF_NULL;
+  tmr_task_cfg.RateHz = 75u;
+  OS_ConfigureTmrTask(&tmr_task_cfg);
+
   CPU_Init();
   OS_TRACE_INIT();
   OSInit(&err);                                               /* Initialize the Kernel.                               */
