@@ -292,7 +292,7 @@ void blink_init(void)
   GLIB_setFont(&glibContext, (GLIB_Font_t *) &GLIB_FontNarrow6x8);
 
   // Test Config Data Values
-//  EFM_ASSERT(valid_config_data() == 1);
+  EFM_ASSERT(valid_config_data() == 1);
 
   // ------------------ CREATE FINAL PROJECT DATA STRUCTURES ---------------- //
   // BTN0 Flag Group
